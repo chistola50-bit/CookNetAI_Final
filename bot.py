@@ -51,7 +51,11 @@ async def cmd_start(message: types.Message):
 
 # === Добавление рецепта ===
 @dp.callback_query_handler(lambda c: c.data == "add")
-async def cb_add_recipe(call: types.CallbackQuery):
+async def cb_add_recipe(call: types.CallbackQuery, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is not None:
+        await call.message.answer("⚠️ Ты уже добавляешь рецепт. Сначала закончи предыдущий.")
+        return
     await call.message.answer("📸 Отправь фото блюда для добавления рецепта.")
     await AddRecipe.waiting_for_photo.set()
 
