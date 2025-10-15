@@ -4,23 +4,22 @@ import asyncio
 from flask import Flask, render_template_string, request
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils.executor import Executor
+from aiogram.utils.executor import start_webhook
 from database import (
     init_db, upsert_user,
-    add_recipe, get_recipes, like_recipe, get_random_recipe,
-    set_chat_sub, set_daily_sub,
-    get_chat_subscribers_chat_ids, get_daily_subscribers_chat_ids,
+    add_recipe, get_recipes, like_recipe,
     save_chat_message, get_recent_chat_messages
 )
 from config import TOKEN, COOKNET_URL
 
-# === ИНИЦИАЛИЗАЦИЯ ===
+# === НАСТРОЙКА ===
 logging.basicConfig(level=logging.INFO)
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
 init_db()
 
-# === Flask сервер ===
+# === Flask приложение ===
 app = Flask(__name__)
 
 @app.route('/')
@@ -29,7 +28,7 @@ def index():
     html = """
     <h1>🍳 CookNet AI</h1>
     <p>Добро пожаловать, шеф!</p>
-    <a href="https://t.me/cooknet_ai_bot">Открыть Telegram-бота</a>
+    <p><a href="https://t.me/cooknet_ai_bot">Открыть Telegram-бота</a></p>
     <h2>🔥 Топ рецептов:</h2>
     {% for r in recipes %}
       <div style="border:1px solid #ccc; padding:10px; margin:10px;">
@@ -81,32 +80,40 @@ async def cmd_top(message: types.Message):
         caption = f"🍽 {r[3]}\n👤 @{r[2] or 'anon'}\n❤️ {r[6]}\n\n{r[4]}"
         await bot.send_message(message.chat.id, caption)
 
-# === Интеграция Flask + Aiogram ===
+# === Настройки Render и Webhook ===
+WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL", "https://cooknetai-final.onrender.com")
+WEBHOOK_PATH = f"/webhook/{TOKEN}"
+WEBHOOK_URL = WEBHOOK_HOST + WEBHOOK_PATH
 WEBAPP_HOST = "0.0.0.0"
 WEBAPP_PORT = int(os.getenv("PORT", 10000))
-WEBHOOK_URL = f"{os.getenv('RENDER_EXTERNAL_URL', 'https://cooknetai-final.onrender.com')}/webhook/{TOKEN}"
 
-executor = Executor(dp)
-
-@app.post(f"/webhook/{TOKEN}")
-async def webhook():
-    update = types.Update(**await request.json)
+@app.post(WEBHOOK_PATH)
+async def telegram_webhook():
+    data = await request.get_json()
+    update = types.Update(**data)
     await dp.process_update(update)
     return "OK", 200
 
-@executor.on_startup
 async def on_startup(dp):
     await bot.set_webhook(WEBHOOK_URL)
     logging.info(f"Webhook установлен: {WEBHOOK_URL}")
 
-@executor.on_shutdown
 async def on_shutdown(dp):
+    logging.warning("Удаляем webhook...")
     await bot.delete_webhook()
-    logging.warning("Webhook удалён")
 
+# === Запуск ===
 if __name__ == "__main__":
-    # Flask + Aiogram на одном порту
     loop = asyncio.get_event_loop()
-    executor.loop = loop
-    executor.start_polling(dp, skip_updates=True)
-    app.run(host=WEBAPP_HOST, port=WEBAPP_PORT)
+
+    async def start_bot():
+        await on_startup(dp)
+        from threading import Thread
+        Thread(target=lambda: app.run(host=WEBAPP_HOST, port=WEBAPP_PORT, debug=False)).start()
+        while True:
+            await asyncio.sleep(3600)
+
+    try:
+        loop.run_until_complete(start_bot())
+    except (KeyboardInterrupt, SystemExit):
+        loop.run_until_complete(on_shutdown(dp))
