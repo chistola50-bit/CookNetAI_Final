@@ -4,7 +4,7 @@ import asyncio
 from flask import Flask, request
 from aiogram import Bot, Dispatcher, types
 from config import TOKEN
-from database import get_recipes, init_db
+from database import init_db
 
 # === Настройки ===
 app = Flask(__name__)
@@ -25,10 +25,20 @@ def home():
 # === Обработка Telegram webhook ===
 @app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
-    data = request.get_json()
-    update = types.Update(**data)
-    asyncio.get_event_loop().create_task(dp.process_update(update))
-    return "OK", 200
+    try:
+        data = request.get_json(force=True)
+        update = types.Update(**data)
+
+        # создаём и запускаем отдельный цикл для aiogram
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(dp.process_update(update))
+        loop.close()
+        return "OK", 200
+
+    except Exception as e:
+        logging.exception(e)
+        return "Ошибка обработки вебхука", 500
 
 # === Запуск web-сервера и настройка webhook ===
 async def setup_webhook():
@@ -36,7 +46,7 @@ async def setup_webhook():
     logging.info(f"Webhook установлен: {WEBHOOK_URL}")
 
 def start_app():
-    asyncio.get_event_loop().run_until_complete(setup_webhook())
+    asyncio.run(setup_webhook())
     port = int(os.getenv("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
