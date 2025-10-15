@@ -1,13 +1,13 @@
 import os
 import logging
 import asyncio
-from flask import Flask, request
+from flask import Flask, request, render_template
 from aiogram import Bot, Dispatcher, types
 from config import TOKEN
 from database import init_db
 
-# === Настройки ===
-app = Flask(__name__)
+# === Настройки приложения ===
+app = Flask(__name__, template_folder="templates", static_folder="static")
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=TOKEN)
@@ -17,19 +17,29 @@ init_db()
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = os.getenv("RENDER_EXTERNAL_URL", "https://cooknetai-final.onrender.com") + WEBHOOK_PATH
 
-# === Главная страница ===
+# === Главная страница сайта ===
 @app.route("/")
 def home():
-    return "<h1>🍳 CookNet AI работает!</h1><p>Бот и вебхук активны.</p>"
+    return render_template("index.html")
 
-# === Обработка Telegram webhook ===
+# === Страница рейтинга (заглушка пока) ===
+@app.route("/top")
+def top_page():
+    return "<h2>🏆 Рейтинг рецептов появится здесь!</h2>"
+
+# === Страница рецепта дня (заглушка пока) ===
+@app.route("/daily")
+def daily_page():
+    return "<h2>🍲 Рецепт дня в разработке...</h2>"
+
+# === Webhook для Telegram ===
 @app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
     try:
         data = request.get_json(force=True)
         update = types.Update(**data)
 
-        # создаём и запускаем отдельный цикл для aiogram
+        # отдельный event loop для aiogram
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(dp.process_update(update))
@@ -40,7 +50,7 @@ def webhook():
         logging.exception(e)
         return "Ошибка обработки вебхука", 500
 
-# === Запуск web-сервера и настройка webhook ===
+# === Установка webhook при старте ===
 async def setup_webhook():
     await bot.set_webhook(WEBHOOK_URL)
     logging.info(f"Webhook установлен: {WEBHOOK_URL}")

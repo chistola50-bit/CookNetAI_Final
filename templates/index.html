@@ -1,17 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Главная — CookNet AI{% endblock %}
+
 {% block content %}
-<h2 class="mb-4 text-warning">🔥 Топ рецептов</h2>
-<div class="row row-cols-1 row-cols-md-2 g-4">
-  {% for r in recipes %}
-  <div class="col">
-    <div class="card bg-dark text-light p-3">
-      <img src="https://api.telegram.org/file/bot{{token}}/{{r[5]}}" class="card-img-top rounded mb-3">
-      <h5>{{r[3]}}</h5>
-      <p>{{r[4]}}</p>
-      <small>👤 @{{r[2] or 'anon'}} | ❤️ {{r[6]}}</small>
-    </div>
-  </div>
-  {% endfor %}
+<div class="text-center mt-5">
+    <img src="{{ url_for('static', filename='logo.png') }}" width="120" class="mb-3">
+    <h1 class="display-5 fw-bold">Добро пожаловать в CookNet AI!</h1>
+    <p class="lead">Ищи, добавляй и оценивай рецепты со всего мира 🌍</p>
+    <a href="https://t.me/cooknet_ai_bot" class="btn btn-primary btn-lg mt-3">
+        🚀 Открыть бота в Telegram
+    </a>
 </div>
 {% endblock %}

@@ -1,9 +1,7 @@
 body {
-  background-color: #121212;
-  color: #eee;
-  font-family: 'Segoe UI', sans-serif;
+    font-family: "Segoe UI", Roboto, sans-serif;
 }
-.card {
-  border: none;
-  border-radius: 1rem;
+footer {
+    font-size: 0.9rem;
+    color: #555;
 }
