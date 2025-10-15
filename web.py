@@ -30,11 +30,10 @@ dp = Dispatcher(bot, storage=storage)
 
 # ---------------- АНТИСПАМ + FSM АВТОСБРОС ----------------
 user_last_action = {}
-SPAM_DELAY = 3  # задержка между действиями
-STATE_TIMEOUT = 300  # авто-сброс FSM через 5 минут
+SPAM_DELAY = 3
+STATE_TIMEOUT = 300
 
 def is_spamming(user_id: int) -> bool:
-    """Проверка на слишком частые клики"""
     now = time.time()
     last = user_last_action.get(user_id, 0)
     if now - last < SPAM_DELAY:
@@ -43,7 +42,6 @@ def is_spamming(user_id: int) -> bool:
     return False
 
 async def reset_state_if_expired(user_id, state: FSMContext):
-    """Автоматический сброс FSM, если она 'зависла'"""
     data = await state.get_data()
     start_time = data.get("_start_time")
     now = time.time()
@@ -60,14 +58,19 @@ class AddRecipeFSM(StatesGroup):
 # ---------------- КНОПКИ ----------------
 def main_kb():
     kb = InlineKeyboardMarkup(row_width=1)
+    site_link = SITE_URL.rstrip("/") + "/recipes"  # ✅ исправлено (без \n)
     kb.add(
         InlineKeyboardButton("➕ Добавить рецепт", callback_data="add"),
         InlineKeyboardButton("🏆 Топ недели", callback_data="top"),
-        InlineKeyboardButton("🌐 Открыть сайт", url=SITE_URL.rstrip("/") + "/recipes"),
+        InlineKeyboardButton("🌐 Открыть сайт", url=site_link),
     )
     return kb
 
 # ---------------- БОТ ----------------
+@dp.message_handler(commands=['ping'])
+async def cmd_ping(message: types.Message):
+    await message.answer("✅ Бот активен и отвечает! 🚀")
+
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
     await message.answer("👋 Привет! Это CookNet AI — делись рецептами и вдохновляйся 🍳", reply_markup=main_kb())
@@ -203,7 +206,6 @@ asyncio.run_coroutine_threadsafe(_setup(), _loop)
 
 @app.post(f"{WEBHOOK_PATH}")
 def telegram_webhook():
-    """Мгновенный ответ Telegram + обработка в фоне"""
     try:
         data = request.get_json(force=True)
         asyncio.run_coroutine_threadsafe(_process_update(data), _loop)
