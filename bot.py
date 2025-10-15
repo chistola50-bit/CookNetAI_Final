@@ -10,37 +10,36 @@ from flask import Flask, request, render_template, redirect, url_for
 from database import init_db, add_recipe, get_recipes, like_recipe, get_top_recipes
 from utils import generate_caption
 
-# ---------- Config ----------
-TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TOKEN") or "PUT_YOUR_TOKEN_HERE"
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:10000")
+# ---------- CONFIG ----------
+TOKEN = "8335733549:AAFMpqifzGVVAPb_IeTpWMy8IhvSiTZEsuo"
+SITE_URL = "https://cooknetai-final.onrender.com"
+
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
-WEBHOOK_URL = RENDER_EXTERNAL_URL.rstrip("/") + WEBHOOK_PATH
+WEBHOOK_URL = SITE_URL.rstrip("/") + WEBHOOK_PATH
 
 logging.basicConfig(level=logging.INFO)
 
-# aiogram
+# ---------- AIOGRAM ----------
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())
-
-# db
 init_db()
 
-# ---------- FSM for adding a recipe ----------
+# ---------- FSM ----------
 class RecipeForm(StatesGroup):
     photo = State()
     title = State()
-    desc = State()
+    description = State()
 
 def main_keyboard():
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(
         InlineKeyboardButton("➕ Добавить рецепт", callback_data="add"),
         InlineKeyboardButton("🏆 Топ недели", callback_data="top"),
-        InlineKeyboardButton("🌐 Открыть сайт", url=RENDER_EXTERNAL_URL + "/recipes")
+        InlineKeyboardButton("🌐 Открыть сайт", url=SITE_URL + "/recipes")
     )
     return kb
 
-@dp.message_handler(commands=['start'])
+@dp.message_handler(commands=["start"])
 async def cmd_start(message: types.Message):
     await message.answer(
         "👋 Привет, шеф!\nCookNet AI — делись рецептами и вдохновляйся 🍳",
@@ -52,9 +51,8 @@ async def cb_add(call: types.CallbackQuery):
     await call.message.answer("📸 Отправь фото блюда:")
     await RecipeForm.photo.set()
 
-@dp.message_handler(content_types=['photo'], state=RecipeForm.photo)
+@dp.message_handler(content_types=["photo"], state=RecipeForm.photo)
 async def fsm_photo(message: types.Message, state: FSMContext):
-    # Save Telegram file_id and also get a public photo_url to render on the site
     file_id = message.photo[-1].file_id
     try:
         file = await bot.get_file(file_id)
@@ -72,22 +70,22 @@ async def fsm_title(message: types.Message, state: FSMContext):
     await RecipeForm.next()
     await message.answer("✍️ Опиши рецепт (кратко):")
 
-@dp.message_handler(state=RecipeForm.desc)
-async def fsm_desc(message: types.Message, state: FSMContext):
+@dp.message_handler(state=RecipeForm.description)
+async def fsm_description(message: types.Message, state: FSMContext):
     data = await state.get_data()
     title = data.get("title")
-    desc = message.text.strip()
+    description = message.text.strip()
     photo_id = data.get("photo_id")
     photo_url = data.get("photo_url")
-    # AI caption (safe fallback if no key)
-    ai_caption = generate_caption(title, desc)
+
+    ai_caption = generate_caption(title, description)
     add_recipe(
         username=message.from_user.username or "anon",
         title=title,
-        desc=desc,
+        description=description,
         photo_id=photo_id,
         photo_url=photo_url,
-        ai_caption=ai_caption
+        ai_caption=ai_caption,
     )
     await message.answer(f"✅ Рецепт сохранён!\n✨ AI-подпись: {ai_caption}")
     await state.finish()
@@ -99,17 +97,16 @@ async def cb_top(call: types.CallbackQuery):
         await call.message.answer("Пока нет рецептов. Добавь свой через «➕ Добавить рецепт».")
         return
     for r in top:
-        # r = dict row
-        caption = f"🍽 {r['title']}\n👤 @{r['username']}\n❤️ {r['likes']}\n\n{r['ai_caption'] or r['desc'][:120]}"
-        if r['photo_id']:
+        caption = f"🍽 {r['title']}\n👤 @{r['username']}\n❤️ {r['likes']}\n\n{r['ai_caption'] or r['description'][:120]}"
+        if r["photo_id"]:
             try:
-                await bot.send_photo(call.message.chat.id, r['photo_id'], caption=caption)
+                await bot.send_photo(call.message.chat.id, r["photo_id"], caption=caption)
             except Exception:
                 await bot.send_message(call.message.chat.id, caption)
         else:
             await bot.send_message(call.message.chat.id, caption)
 
-# ---------- Flask Site + Webhook ----------
+# ---------- FLASK ----------
 app = Flask(__name__)
 
 @app.route("/")
@@ -131,8 +128,7 @@ def webhook():
     try:
         data = request.get_json(force=True)
         update = types.Update(**data)
-        # important for aiogram v2 context
-        Bot.set_current(bot)
+        Bot.set_current(bot)  # фикс контекста
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(dp.process_update(update))
