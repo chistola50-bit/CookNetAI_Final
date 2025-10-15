@@ -17,10 +17,10 @@ logging.basicConfig(level=logging.INFO)
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TOKEN") or "8335733549:AAFMpqifzGVVAPb_IeTpWMy8IhvSiTZEsuo"
-SITE_URL = os.getenv("COOKNET_URL") or "https://cooknetai-final.onrender.com"
+SITE_URL = (os.getenv("COOKNET_URL") or "https://cooknetai-final.onrender.com").strip()
 
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
-WEBHOOK_URL = SITE_URL.rstrip("/") + WEBHOOK_PATH
+WEBHOOK_URL = f"{SITE_URL.rstrip('/')}{WEBHOOK_PATH}"
 
 # ---------------- ИНИЦИАЛИЗАЦИЯ ----------------
 init_db()
@@ -33,7 +33,9 @@ user_last_action = {}
 SPAM_DELAY = 3
 STATE_TIMEOUT = 300
 
+
 def is_spamming(user_id: int) -> bool:
+    """Проверка на слишком частые действия"""
     now = time.time()
     last = user_last_action.get(user_id, 0)
     if now - last < SPAM_DELAY:
@@ -41,13 +43,21 @@ def is_spamming(user_id: int) -> bool:
     user_last_action[user_id] = now
     return False
 
+
 async def reset_state_if_expired(user_id, state: FSMContext):
+    """Автоматический сброс FSM, если зависла"""
     data = await state.get_data()
     start_time = data.get("_start_time")
     now = time.time()
     if start_time and now - start_time > STATE_TIMEOUT:
         await state.finish()
-        logging.info(f"FSM сброшено из-за таймаута для {user_id}")
+        logging.info(f"FSM сброшено по таймауту для {user_id}")
+
+
+def clean_url(url: str) -> str:
+    """Удаляет пробелы и переносы"""
+    return url.replace(" ", "").replace("\n", "").replace("\r", "")
+
 
 # ---------------- СОСТОЯНИЯ ----------------
 class AddRecipeFSM(StatesGroup):
@@ -55,10 +65,11 @@ class AddRecipeFSM(StatesGroup):
     title = State()
     desc = State()
 
+
 # ---------------- КНОПКИ ----------------
 def main_kb():
     kb = InlineKeyboardMarkup(row_width=1)
-    site_link = SITE_URL.rstrip("/") + "/recipes"  # ✅ исправлено (без \n)
+    site_link = clean_url(f"{SITE_URL.rstrip('/')}/recipes")
     kb.add(
         InlineKeyboardButton("➕ Добавить рецепт", callback_data="add"),
         InlineKeyboardButton("🏆 Топ недели", callback_data="top"),
@@ -66,14 +77,17 @@ def main_kb():
     )
     return kb
 
-# ---------------- БОТ ----------------
+
+# ---------------- КОМАНДЫ ----------------
 @dp.message_handler(commands=['ping'])
 async def cmd_ping(message: types.Message):
     await message.answer("✅ Бот активен и отвечает! 🚀")
 
+
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
     await message.answer("👋 Привет! Это CookNet AI — делись рецептами и вдохновляйся 🍳", reply_markup=main_kb())
+
 
 @dp.callback_query_handler(lambda c: c.data == "add")
 async def add_start(call: types.CallbackQuery, state: FSMContext):
@@ -86,10 +100,12 @@ async def add_start(call: types.CallbackQuery, state: FSMContext):
     await state.update_data(_start_time=time.time())
     await bot.send_message(call.message.chat.id, "📸 Отправь фото блюда.\nЕсли передумал — /cancel")
 
+
 @dp.message_handler(commands=['cancel'], state='*')
 async def cancel(message: types.Message, state: FSMContext):
     await state.finish()
     await message.answer("❌ Добавление отменено.", reply_markup=main_kb())
+
 
 @dp.message_handler(content_types=['photo'], state=AddRecipeFSM.photo)
 async def fsm_photo(message: types.Message, state: FSMContext):
@@ -107,9 +123,11 @@ async def fsm_photo(message: types.Message, state: FSMContext):
     await state.update_data(_start_time=time.time())
     await message.answer("🍽 Введи название блюда:")
 
+
 @dp.message_handler(lambda m: not m.photo, state=AddRecipeFSM.photo, content_types=types.ContentTypes.ANY)
 async def require_photo(message: types.Message):
     await message.answer("Нужно фото 📷. Отправь фото или /cancel")
+
 
 @dp.message_handler(state=AddRecipeFSM.title)
 async def fsm_title(message: types.Message, state: FSMContext):
@@ -121,6 +139,7 @@ async def fsm_title(message: types.Message, state: FSMContext):
     await state.update_data(title=title, _start_time=time.time())
     await AddRecipeFSM.next()
     await message.answer("✍️ Опиши рецепт (кратко):")
+
 
 @dp.message_handler(state=AddRecipeFSM.desc)
 async def fsm_desc(message: types.Message, state: FSMContext):
@@ -146,6 +165,7 @@ async def fsm_desc(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Рецепт сохранён!\n✨ AI-подпись: {ai_caption}", reply_markup=main_kb())
     await state.finish()
 
+
 @dp.callback_query_handler(lambda c: c.data == "top")
 async def cb_top(call: types.CallbackQuery):
     if is_spamming(call.from_user.id):
@@ -165,14 +185,17 @@ async def cb_top(call: types.CallbackQuery):
         else:
             await bot.send_message(call.message.chat.id, caption)
 
+
 # ---------------- FLASK ----------------
 @app.route('/')
 def home():
     return render_template('index.html')
 
+
 @app.route('/recipes')
 def recipes_page():
     return render_template('recipes.html', recipes=get_recipes(limit=60))
+
 
 @app.route('/recipe/<int:rid>')
 def recipe_page(rid):
@@ -181,9 +204,11 @@ def recipe_page(rid):
         abort(404)
     return render_template('recipe.html', r=r)
 
+
 @app.route('/top')
 def top_page():
     return render_template('top.html', recipes=get_top_recipes(limit=20))
+
 
 @app.post('/like/<int:rid>')
 def like_route(rid):
@@ -191,18 +216,26 @@ def like_route(rid):
     ref = request.referrer or url_for('recipes_page')
     return redirect(ref)
 
+
 # ---------------- WEBHOOK ----------------
 _loop = asyncio.new_event_loop()
+
+
 def _run_loop():
     asyncio.set_event_loop(_loop)
     _loop.run_forever()
+
+
 threading.Thread(target=_run_loop, daemon=True).start()
+
 
 async def _setup():
     await bot.set_webhook(WEBHOOK_URL)
     logging.info(f"✅ Webhook установлен: {WEBHOOK_URL}")
 
+
 asyncio.run_coroutine_threadsafe(_setup(), _loop)
+
 
 @app.post(f"{WEBHOOK_PATH}")
 def telegram_webhook():
@@ -214,6 +247,7 @@ def telegram_webhook():
         logging.exception(e)
         return "FAIL", 500
 
+
 async def _process_update(data):
     try:
         update = types.Update(**data)
@@ -223,6 +257,7 @@ async def _process_update(data):
         await dp.process_update(update)
     except Exception as ex:
         logging.exception(f"Ошибка обработки апдейта: {ex}")
+
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
