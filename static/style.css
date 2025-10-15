@@ -1,3 +1,5 @@
-body{background:#fafafa;font-family:"Segoe UI",system-ui,-apple-system,Arial;}
-.placeholder-img{height:220px;background:#f1f1f1;border-top-left-radius:.75rem;border-top-right-radius:.75rem;font-size:48px;}
-.card img{height:220px;object-fit:cover;}
+:root { --card-radius: 16px; }
+.card { border-radius: var(--card-radius); overflow: hidden; }
+.card-img-top { object-fit: cover; height: 220px; }
+body { background: #0f1115; }
+.navbar { backdrop-filter: blur(8px); }

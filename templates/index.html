@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="text-center py-5">
-  <h1 class="display-5 fw-semibold">Добро пожаловать в CookNet AI 👩‍🍳</h1>
-  <p class="lead text-muted">Добавляй рецепты в Telegram-боте и смотри их на сайте — красиво и удобно.</p>
-  <a href="/recipes" class="btn btn-danger btn-lg mt-3">Перейти к рецептам</a>
+  <h1 class="display-5 fw-bold">CookNet <span class="text-primary">AI</span></h1>
+  <p class="lead mb-4">Лента рецептов, лайки и умные подписи — всё в одном месте.</p>
+  <a class="btn btn-lg btn-primary" href="{{ url_for('recipes_page') }}">Перейти в рецепты</a>
 </div>
 {% endblock %}
