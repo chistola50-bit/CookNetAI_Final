@@ -16,6 +16,7 @@ logging.basicConfig(level=logging.INFO)
 
 # === ИНИЦИАЛИЗАЦИЯ ===
 bot = Bot(token=TOKEN)
+bot.set_current(bot)  # <-- исправление ошибки контекста
 dp = Dispatcher(bot)
 init_db()
 
@@ -66,7 +67,7 @@ async def cb_like(call: types.CallbackQuery):
     like_recipe(recipe_id)
     await call.answer("❤️ Лайк засчитан!")
 
-# === СТАРТ WEBHOOK ===
+# === ХУКИ ===
 async def on_startup(dp):
     await bot.set_webhook(WEBHOOK_URL)
     logging.info(f"Webhook set to {WEBHOOK_URL}")
@@ -75,6 +76,7 @@ async def on_shutdown(dp):
     logging.warning("Удаляем webhook...")
     await bot.delete_webhook()
 
+# === СТАРТ ===
 if __name__ == "__main__":
     start_webhook(
         dispatcher=dp,
