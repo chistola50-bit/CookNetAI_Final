@@ -1,119 +1,155 @@
-import logging
 import os
+import logging
 import asyncio
-from flask import Flask, render_template_string, request
 from aiogram import Bot, Dispatcher, types
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils.executor import start_webhook
-from database import (
-    init_db, upsert_user,
-    add_recipe, get_recipes, like_recipe,
-    save_chat_message, get_recent_chat_messages
-)
-from config import TOKEN, COOKNET_URL
+from flask import Flask, request, render_template, redirect, url_for
+from database import init_db, add_recipe, get_recipes, like_recipe, get_top_recipes
+from utils import generate_caption
 
-# === НАСТРОЙКА ===
+# ---------- Config ----------
+TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TOKEN") or "PUT_YOUR_TOKEN_HERE"
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:10000")
+WEBHOOK_PATH = f"/webhook/{TOKEN}"
+WEBHOOK_URL = RENDER_EXTERNAL_URL.rstrip("/") + WEBHOOK_PATH
+
 logging.basicConfig(level=logging.INFO)
 
+# aiogram
 bot = Bot(token=TOKEN)
-dp = Dispatcher(bot)
+dp = Dispatcher(bot, storage=MemoryStorage())
+
+# db
 init_db()
 
-# === Flask приложение ===
-app = Flask(__name__)
+# ---------- FSM for adding a recipe ----------
+class RecipeForm(StatesGroup):
+    photo = State()
+    title = State()
+    desc = State()
 
-@app.route('/')
-def index():
-    recipes = get_recipes(limit=5)
-    html = """
-    <h1>🍳 CookNet AI</h1>
-    <p>Добро пожаловать, шеф!</p>
-    <p><a href="https://t.me/cooknet_ai_bot">Открыть Telegram-бота</a></p>
-    <h2>🔥 Топ рецептов:</h2>
-    {% for r in recipes %}
-      <div style="border:1px solid #ccc; padding:10px; margin:10px;">
-        <b>{{r[3]}}</b> — ❤️ {{r[6]}} лайков<br>
-        👤 @{{r[2] or 'anon'}}<br>
-        <p>{{r[4]}}</p>
-      </div>
-    {% endfor %}
-    """
-    return render_template_string(html, recipes=recipes)
+def main_keyboard():
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        InlineKeyboardButton("➕ Добавить рецепт", callback_data="add"),
+        InlineKeyboardButton("🏆 Топ недели", callback_data="top"),
+        InlineKeyboardButton("🌐 Открыть сайт", url=RENDER_EXTERNAL_URL + "/recipes")
+    )
+    return kb
 
-@app.route('/chat', methods=['GET', 'POST'])
-def chat():
-    if request.method == 'POST':
-        user = request.form.get('user', 'anon')
-        msg = request.form.get('msg', '').strip()
-        if msg:
-            save_chat_message(0, user, msg)
-    messages = get_recent_chat_messages(30)
-    html = """
-    <h1>💬 Общий чат</h1>
-    <form method="POST">
-      <input name="user" placeholder="Имя" required>
-      <input name="msg" placeholder="Сообщение" required>
-      <button type="submit">Отправить</button>
-    </form><hr>
-    {% for u, t, ts in messages %}
-      <p><b>{{u}}</b>: {{t}} <i>{{ts}}</i></p>
-    {% endfor %}
-    """
-    return render_template_string(html, messages=messages)
-
-# === Telegram ===
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
-    upsert_user(message.from_user.id, message.from_user.username, message.chat.id)
-    kb = InlineKeyboardMarkup().add(
-        InlineKeyboardButton("🍳 Открыть сайт", url=COOKNET_URL)
+    await message.answer(
+        "👋 Привет, шеф!\nCookNet AI — делись рецептами и вдохновляйся 🍳",
+        reply_markup=main_keyboard()
     )
-    await message.answer("👋 Привет, шеф! Добро пожаловать в CookNet AI 🍲", reply_markup=kb)
 
-@dp.message_handler(commands=['top'])
-async def cmd_top(message: types.Message):
-    recipes = get_recipes(limit=5)
-    if not recipes:
-        await message.answer("Пока нет рецептов 😅")
+@dp.callback_query_handler(lambda c: c.data == "add")
+async def cb_add(call: types.CallbackQuery):
+    await call.message.answer("📸 Отправь фото блюда:")
+    await RecipeForm.photo.set()
+
+@dp.message_handler(content_types=['photo'], state=RecipeForm.photo)
+async def fsm_photo(message: types.Message, state: FSMContext):
+    # Save Telegram file_id and also get a public photo_url to render on the site
+    file_id = message.photo[-1].file_id
+    try:
+        file = await bot.get_file(file_id)
+        file_path = file.file_path
+        photo_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_path}"
+    except Exception:
+        photo_url = None
+    await state.update_data(photo_id=file_id, photo_url=photo_url)
+    await RecipeForm.next()
+    await message.answer("🍽 Введи название блюда:")
+
+@dp.message_handler(state=RecipeForm.title)
+async def fsm_title(message: types.Message, state: FSMContext):
+    await state.update_data(title=message.text.strip())
+    await RecipeForm.next()
+    await message.answer("✍️ Опиши рецепт (кратко):")
+
+@dp.message_handler(state=RecipeForm.desc)
+async def fsm_desc(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    title = data.get("title")
+    desc = message.text.strip()
+    photo_id = data.get("photo_id")
+    photo_url = data.get("photo_url")
+    # AI caption (safe fallback if no key)
+    ai_caption = generate_caption(title, desc)
+    add_recipe(
+        username=message.from_user.username or "anon",
+        title=title,
+        desc=desc,
+        photo_id=photo_id,
+        photo_url=photo_url,
+        ai_caption=ai_caption
+    )
+    await message.answer(f"✅ Рецепт сохранён!\n✨ AI-подпись: {ai_caption}")
+    await state.finish()
+
+@dp.callback_query_handler(lambda c: c.data == "top")
+async def cb_top(call: types.CallbackQuery):
+    top = get_top_recipes(limit=5)
+    if not top:
+        await call.message.answer("Пока нет рецептов. Добавь свой через «➕ Добавить рецепт».")
         return
-    for r in recipes:
-        caption = f"🍽 {r[3]}\n👤 @{r[2] or 'anon'}\n❤️ {r[6]}\n\n{r[4]}"
-        await bot.send_message(message.chat.id, caption)
+    for r in top:
+        # r = dict row
+        caption = f"🍽 {r['title']}\n👤 @{r['username']}\n❤️ {r['likes']}\n\n{r['ai_caption'] or r['desc'][:120]}"
+        if r['photo_id']:
+            try:
+                await bot.send_photo(call.message.chat.id, r['photo_id'], caption=caption)
+            except Exception:
+                await bot.send_message(call.message.chat.id, caption)
+        else:
+            await bot.send_message(call.message.chat.id, caption)
 
-# === Настройки Render и Webhook ===
-WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL", "https://cooknetai-final.onrender.com")
-WEBHOOK_PATH = f"/webhook/{TOKEN}"
-WEBHOOK_URL = WEBHOOK_HOST + WEBHOOK_PATH
-WEBAPP_HOST = "0.0.0.0"
-WEBAPP_PORT = int(os.getenv("PORT", 10000))
+# ---------- Flask Site + Webhook ----------
+app = Flask(__name__)
 
-@app.post(WEBHOOK_PATH)
-async def telegram_webhook():
-    data = await request.get_json()
-    update = types.Update(**data)
-    await dp.process_update(update)
-    return "OK", 200
+@app.route("/")
+def home():
+    return render_template("index.html")
 
-async def on_startup(dp):
+@app.route("/recipes")
+def recipes_page():
+    recipes = get_recipes(limit=36)
+    return render_template("recipes.html", recipes=recipes)
+
+@app.route("/like/<int:recipe_id>", methods=["POST"])
+def like(recipe_id: int):
+    like_recipe(recipe_id)
+    return redirect(url_for("recipes_page"))
+
+@app.route(WEBHOOK_PATH, methods=["POST"])
+def webhook():
+    try:
+        data = request.get_json(force=True)
+        update = types.Update(**data)
+        # important for aiogram v2 context
+        Bot.set_current(bot)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(dp.process_update(update))
+        loop.close()
+        return "OK", 200
+    except Exception as e:
+        logging.exception(e)
+        return "ERROR", 500
+
+async def setup_webhook():
     await bot.set_webhook(WEBHOOK_URL)
     logging.info(f"Webhook установлен: {WEBHOOK_URL}")
 
-async def on_shutdown(dp):
-    logging.warning("Удаляем webhook...")
-    await bot.delete_webhook()
+def start_app():
+    asyncio.run(setup_webhook())
+    port = int(os.getenv("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
 
-# === Запуск ===
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-
-    async def start_bot():
-        await on_startup(dp)
-        from threading import Thread
-        Thread(target=lambda: app.run(host=WEBAPP_HOST, port=WEBAPP_PORT, debug=False)).start()
-        while True:
-            await asyncio.sleep(3600)
-
-    try:
-        loop.run_until_complete(start_bot())
-    except (KeyboardInterrupt, SystemExit):
-        loop.run_until_complete(on_shutdown(dp))
+    start_app()
