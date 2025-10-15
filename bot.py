@@ -1,10 +1,10 @@
 import logging
 import os
 import asyncio
-from flask import Flask, render_template_string, request, redirect, url_for
+from flask import Flask, render_template_string, request
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils.executor import start_webhook
+from aiogram.utils.executor import Executor
 from database import (
     init_db, upsert_user,
     add_recipe, get_recipes, like_recipe, get_random_recipe,
@@ -14,25 +14,22 @@ from database import (
 )
 from config import TOKEN, COOKNET_URL
 
+# === ИНИЦИАЛИЗАЦИЯ ===
 logging.basicConfig(level=logging.INFO)
-
-# === Telegram Bot ===
 bot = Bot(token=TOKEN)
-bot.set_current(bot)
 dp = Dispatcher(bot)
 init_db()
 
-# === Flask Web App ===
+# === Flask сервер ===
 app = Flask(__name__)
 
-# Главная страница
 @app.route('/')
 def index():
     recipes = get_recipes(limit=5)
     html = """
     <h1>🍳 CookNet AI</h1>
     <p>Добро пожаловать, шеф!</p>
-    <p><a href="https://t.me/cooknet_ai_bot">Открыть Telegram-бота</a></p>
+    <a href="https://t.me/cooknet_ai_bot">Открыть Telegram-бота</a>
     <h2>🔥 Топ рецептов:</h2>
     {% for r in recipes %}
       <div style="border:1px solid #ccc; padding:10px; margin:10px;">
@@ -44,28 +41,8 @@ def index():
     """
     return render_template_string(html, recipes=recipes)
 
-# Профиль пользователя
-@app.route('/user/<username>')
-def user_profile(username):
-    recipes = [r for r in get_recipes(limit=50) if r[2] == username]
-    html = """
-    <h1>👤 Профиль @{{username}}</h1>
-    {% if recipes %}
-      {% for r in recipes %}
-        <div style="border:1px solid #ccc; padding:10px; margin:10px;">
-          <b>{{r[3]}}</b> — ❤️ {{r[6]}} лайков<br>
-          <p>{{r[4]}}</p>
-        </div>
-      {% endfor %}
-    {% else %}
-      <p>Нет рецептов 😔</p>
-    {% endif %}
-    """
-    return render_template_string(html, username=username, recipes=recipes)
-
-# Общий чат (веб)
 @app.route('/chat', methods=['GET', 'POST'])
-def web_chat():
+def chat():
     if request.method == 'POST':
         user = request.form.get('user', 'anon')
         msg = request.form.get('msg', '').strip()
@@ -73,42 +50,19 @@ def web_chat():
             save_chat_message(0, user, msg)
     messages = get_recent_chat_messages(30)
     html = """
-    <h1>💬 Общий чат CookNet</h1>
+    <h1>💬 Общий чат</h1>
     <form method="POST">
-      <input name="user" placeholder="Ваше имя" required>
+      <input name="user" placeholder="Имя" required>
       <input name="msg" placeholder="Сообщение" required>
       <button type="submit">Отправить</button>
-    </form>
-    <hr>
+    </form><hr>
     {% for u, t, ts in messages %}
       <p><b>{{u}}</b>: {{t}} <i>{{ts}}</i></p>
     {% endfor %}
     """
     return render_template_string(html, messages=messages)
 
-# Простая админка
-@app.route('/admin')
-def admin_panel():
-    recipes = get_recipes(limit=50)
-    html = """
-    <h1>🛠 Админ-панель CookNet</h1>
-    <p>Всего рецептов: {{recipes|length}}</p>
-    {% for r in recipes %}
-      <div style="border:1px solid #ccc; padding:10px; margin:10px;">
-        <b>{{r[3]}}</b> — ❤️ {{r[6]}} лайков<br>
-        👤 @{{r[2] or 'anon'}}
-      </div>
-    {% endfor %}
-    """
-    return render_template_string(html, recipes=recipes)
-
-# === Telegram Webhook ===
-WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL", "https://cooknetai-final.onrender.com")
-WEBHOOK_PATH = f"/webhook/{TOKEN}"
-WEBHOOK_URL = WEBHOOK_HOST + WEBHOOK_PATH
-WEBAPP_HOST = "0.0.0.0"
-WEBAPP_PORT = int(os.getenv("PORT", 10000))
-
+# === Telegram ===
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
     upsert_user(message.from_user.id, message.from_user.username, message.chat.id)
@@ -127,26 +81,32 @@ async def cmd_top(message: types.Message):
         caption = f"🍽 {r[3]}\n👤 @{r[2] or 'anon'}\n❤️ {r[6]}\n\n{r[4]}"
         await bot.send_message(message.chat.id, caption)
 
+# === Интеграция Flask + Aiogram ===
+WEBAPP_HOST = "0.0.0.0"
+WEBAPP_PORT = int(os.getenv("PORT", 10000))
+WEBHOOK_URL = f"{os.getenv('RENDER_EXTERNAL_URL', 'https://cooknetai-final.onrender.com')}/webhook/{TOKEN}"
+
+executor = Executor(dp)
+
+@app.post(f"/webhook/{TOKEN}")
+async def webhook():
+    update = types.Update(**await request.json)
+    await dp.process_update(update)
+    return "OK", 200
+
+@executor.on_startup
 async def on_startup(dp):
     await bot.set_webhook(WEBHOOK_URL)
-    logging.info(f"Webhook set to {WEBHOOK_URL}")
+    logging.info(f"Webhook установлен: {WEBHOOK_URL}")
 
+@executor.on_shutdown
 async def on_shutdown(dp):
     await bot.delete_webhook()
+    logging.warning("Webhook удалён")
 
 if __name__ == "__main__":
+    # Flask + Aiogram на одном порту
     loop = asyncio.get_event_loop()
-
-    # Запуск Flask и Aiogram вместе
-    from threading import Thread
-    Thread(target=lambda: app.run(host="0.0.0.0", port=WEBAPP_PORT, debug=False)).start()
-
-    start_webhook(
-        dispatcher=dp,
-        webhook_path=WEBHOOK_PATH,
-        on_startup=on_startup,
-        on_shutdown=on_shutdown,
-        skip_updates=True,
-        host=WEBAPP_HOST,
-        port=WEBAPP_PORT + 1,
-    )
+    executor.loop = loop
+    executor.start_polling(dp, skip_updates=True)
+    app.run(host=WEBAPP_HOST, port=WEBAPP_PORT)
