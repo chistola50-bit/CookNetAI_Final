@@ -75,23 +75,29 @@ def webhook():
         data = request.get_json(force=True)
         update = types.Update(**data)
 
+        # создаём новый event loop и явно задаём контекст бота
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        Bot.set_current(bot)  # 👈 фикс ключевой ошибки
+
         loop.run_until_complete(dp.process_update(update))
         loop.close()
         return "OK", 200
+
     except Exception as e:
         logging.exception(e)
         return "Ошибка обработки вебхука", 500
 
 
-# === Настройка вебхука при старте ===
+# === Установка webhook при старте ===
 async def setup_webhook():
     await bot.set_webhook(WEBHOOK_URL)
     logging.info(f"Webhook установлен: {WEBHOOK_URL}")
 
 
 def start_app():
+    import time
+    time.sleep(5)  # задержка, чтобы Render успел поднять порт
     asyncio.run(setup_webhook())
     port = int(os.getenv("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
